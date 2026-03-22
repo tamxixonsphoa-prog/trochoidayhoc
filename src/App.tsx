@@ -57,16 +57,6 @@ const QUESTION_TYPES = [
 
 const GAME_LIBRARY = [
   {
-    id: 'default',
-    name: 'Quiz Mở Thẻ',
-    emoji: '🎴',
-    icon3d: 'https://raw.githubusercontent.com/microsoft/fluentui-emoji/main/assets/Flower%20playing%20cards/3D/flower_playing_cards_3d.png',
-    description: 'Trả lời đúng để lật mở từng thẻ bài.',
-    compatibleTypes: ['Trắc nghiệm khách quan', 'Đúng / Sai'],
-    colorFrom: 'from-indigo-500', colorTo: 'to-violet-500',
-    hoverBorder: 'hover:border-indigo-400',
-  },
-  {
     id: 'vuot_ai',
     name: 'Vượt Ải Tri Thức',
     emoji: '⚔️',
@@ -307,6 +297,12 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Mode 2 File Upload State
+  const [m2FileText, setM2FileText] = useState('');
+  const [m2FileInfo, setM2FileInfo] = useState<{ name: string } | null>(null);
+  const [m2IsExtracting, setM2IsExtracting] = useState(false);
+  const m2FileInputRef = useRef<HTMLInputElement>(null);
+
   const callGeminiWithFallback = async (parts: any[], onStatus?: (msg: string | null) => void) => {
     const currentApiKey = apiKey || process.env.GEMINI_API_KEY || '';
     if (!currentApiKey) {
@@ -432,9 +428,51 @@ export default function App() {
     }
   };
 
+  // Extract text from Word/PDF for Mode 2
+  const extractTextForM2 = async (file: File) => {
+    setM2IsExtracting(true); setError(null);
+    try {
+      let text = '';
+      if (file.name.toLowerCase().endsWith('.docx')) {
+        const mammoth = await loadMammoth();
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        text = result.value || '';
+        if (!text.trim()) throw new Error('File Word không có nội dung văn bản.');
+      } else {
+        // PDF via Gemini
+        const currentApiKey = apiKey || '';
+        if (!currentApiKey) { setError('Vui lòng thiết lập API Key trước.'); return; }
+        const arrayBuffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        const base64 = btoa(binary);
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${currentApiKey}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [
+              { text: 'Hãy trích xuất TOÀN BỘ nội dung văn bản từ tài liệu PDF này. Giữ nguyên cấu trúc.' },
+              { inlineData: { mimeType: 'application/pdf', data: base64 } }
+            ]}]})
+          }
+        );
+        const res = await response.json();
+        text = res?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (!text) throw new Error('Không thể trích xuất nội dung từ PDF.');
+      }
+      setM2FileText(text);
+      setM2FileInfo({ name: file.name });
+    } catch (e: any) {
+      setError(e.message || 'Lỗi khi đọc tệp.');
+    } finally {
+      setM2IsExtracting(false);
+    }
+  };
+
   const runAnalysis = async () => {
-    if (!inputText && !selectedImage) {
-      setError('Vui lòng nhập văn bản hoặc tải lên hình ảnh bài học.');
+    if (!inputText && !selectedImage && !m2FileText) {
+      setError('Vui lòng nhập văn bản, tải lên hình ảnh hoặc tải lên file Word/PDF.');
       return;
     }
 
@@ -462,6 +500,10 @@ export default function App() {
 
       if (inputText) {
         parts.push({ text: `Nội dung văn bản: ${inputText}` });
+      }
+
+      if (m2FileText) {
+        parts.push({ text: `Nội dung từ file tải lên: ${m2FileText}` });
       }
 
       if (selectedImage) {
@@ -702,12 +744,44 @@ export default function App() {
       let extractedText = '';
 
       if (file.name.toLowerCase().endsWith('.docx')) {
-        // ── DOCX: use mammoth.js from CDN ──
+        // ── DOCX: mammoth.js convertToHtml (giữ ảnh dưới dạng base64) ──
         const mammoth = await loadMammoth();
         const arrayBuffer = await file.arrayBuffer();
-        const result = await mammoth.extractRawText({ arrayBuffer });
-        extractedText = result.value || '';
-        if (!extractedText.trim()) throw new Error('File Word không có nội dung văn bản.');
+        const result = await mammoth.convertToHtml(
+          { arrayBuffer },
+          {
+            convertImage: mammoth.images.imgElement((image: any) =>
+              image.read('base64').then((base64Data: string) => ({
+                src: `data:${image.contentType};base64,${base64Data}`,
+              }))
+            ),
+          }
+        );
+        let html = result.value || '';
+        if (!html.trim()) throw new Error('File Word không có nội dung văn bản.');
+
+        // Trích xuất ảnh base64, thay bằng placeholder để không vượt token limit của Gemini
+        const imageMap: Record<string, string> = {};
+        let imgIdx = 0;
+        html = html.replace(/src="(data:[^"]+)"/g, (_match: string, dataUrl: string) => {
+          const key = `__IMG_${++imgIdx}__`;
+          imageMap[key] = dataUrl;
+          return `src="${key}"`;
+        });
+
+        // Chuyển HTML sang text đơn giản (giữ Alt text + placeholder) để gửi Gemini
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        // Thay img tags bằng markdown placeholder
+        tempDiv.querySelectorAll('img').forEach((img: HTMLImageElement) => {
+          const placeholder = img.getAttribute('src') || '';
+          const md = document.createTextNode(`\n![hình](${placeholder})\n`);
+          img.parentNode?.replaceChild(md, img);
+        });
+        extractedText = tempDiv.innerText || tempDiv.textContent || '';
+
+        // Lưu imageMap để re-inject sau khi Gemini parse
+        (window as any).__m1ImageMap = imageMap;
 
       } else {
         // ── PDF: use Gemini inline base64 (natively supported) ──
@@ -751,15 +825,19 @@ export default function App() {
     if (!m1RawText.trim()) { setError('Vui lòng nhập nội dung câu hỏi.'); return; }
     setIsLoading(true); setError(null);
     try {
-      const prompt = `Bạn là trợ lý giáo dục. Hãy phân tích đoạn văn bản câu hỏi sau và trả về ĐÚNG định dạng JSON.
+      const prompt = `Bạn là trợ lý giáo dục. Hãy phân tích nội dung câu hỏi sau (có thể ở dạng HTML có chứa thẻ <img> với ảnh nhúng base64) và trả về ĐÚNG định dạng JSON.
 Dạng câu hỏi: ${m1QuestionTypes.join(', ')}.
+
+QUAN TRỌNG VỀ ẢNH:
+- Nếu câu hỏi có chứa thẻ <img src="data:...">, hãy sao chép NGUYÊN THẺ IMG đó vào trường "content" của câu hỏi dưới dạng markdown: ![](data:image/...;base64,...)
+- Trường content nên kết hợp cả văn bản câu hỏi và những ảnh đi kèm.
 
 QUAN TRỌNG VỀ ĐỊNH DẠNG CÔNG THỨC:
 - Mọi công thức hóa học (C6H12O6, H2SO4, Fe2O3...) và toán học PHẢI được bọc trong ký tự $ định dạng LaTeX.
 - Ví dụ: C6H12O6 → $C_6H_{12}O_6$  |  H2O → $H_2O$  |  10^-10 → $10^{-10}$
 - Đây là YÊU CẦU BẮT BUỘC, không bỏ qua.
 
-Văn bản:
+Văn bản/HTML:
 ${m1RawText}
 
 Trả về JSON bọc trong \`\`\`json ... \`\`\`, là một mảng:
@@ -772,7 +850,21 @@ Nếu là Trả lời ngắn/Điền khuyết: bỏ options, correctAnswer là �
       const jsonMatch = (text || '').match(/```json\n([\s\S]*?)\n```/);
       if (jsonMatch?.[1]) {
         const parsed = safeParseJSON(jsonMatch[1]);
-        if (Array.isArray(parsed)) { setParsedQuestions(applyLatexToQuestions(parsed)); setStage('m1_edit'); return; }
+        if (Array.isArray(parsed)) {
+          // Re-inject ảnh base64 vào nội dung câu hỏi
+          const imageMap: Record<string, string> = (window as any).__m1ImageMap || {};
+          const withImages = parsed.map((q: any) => ({
+            ...q,
+            content: (q.content || '').replace(/__IMG_(\d+)__/g, (_: string, n: string) => {
+              const key = `__IMG_${n}__`;
+              return imageMap[key] ? `![hình](${imageMap[key]})` : '';
+            }),
+          }));
+          delete (window as any).__m1ImageMap;
+          setParsedQuestions(applyLatexToQuestions(withImages));
+          setStage('m1_edit');
+          return;
+        }
       }
       setError('Không thể phân tích. Hãy thử lại hoặc chỉnh sửa thủ công.');
     } catch (e: any) { setError(e.message || 'Lỗi phân tích câu hỏi.'); }
@@ -785,6 +877,7 @@ Nếu là Trả lời ngắn/Điền khuyết: bỏ options, correctAnswer là �
     setQuestions(null); setParsedQuestions([]); setActivities(null);
     setError(null); setSelectedGameId(null);
     setM1QuestionTypes([]); setM1RawText('');
+    setM2FileText(''); setM2FileInfo(null);
   };
 
   const processLatexForWord = (text: string): string => {
@@ -1290,10 +1383,10 @@ Nếu là Trả lời ngắn/Điền khuyết: bỏ options, correctAnswer là �
                   <ChevronRight size={14} style={{ transform:'rotate(180deg)' }} /> Trang chủ
                 </button>
                 <h2 style={{ fontSize:22, fontWeight:800, color:'var(--text)', marginBottom:4 }}>📚 Nhập nội dung bài học</h2>
-                <p style={{ color:'var(--text-3)', fontSize:13 }}>Nhập văn bản hoặc tải ảnh, AI sẽ phân tích kiến thức chính.</p>
+                <p style={{ color:'var(--text-3)', fontSize:13 }}>Nhập văn bản, tải ảnh hoặc tải lên file Word/PDF — AI sẽ phân tích kiến thức chính.</p>
               </div>
 
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:20 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:16 }}>
                 {/* Text input */}
                 <div className="card" style={{ display:'flex', flexDirection:'column', gap:10 }}>
                   <div style={{ display:'flex', alignItems:'center', gap:8, fontWeight:600, fontSize:14, color:'var(--blue)' }}>
@@ -1333,6 +1426,48 @@ Nếu là Trả lời ngắn/Điền khuyết: bỏ options, correctAnswer là �
                 </div>
               </div>
 
+              {/* File upload: Word / PDF — full width row */}
+              <div
+                style={{
+                  border: m2FileInfo ? '2px solid var(--blue)' : '2px dashed var(--border)',
+                  borderRadius: 16, padding: '16px 20px', display: 'flex',
+                  alignItems: 'center', gap: 14, cursor: 'pointer',
+                  background: m2FileInfo ? 'rgba(0,85,196,0.05)' : 'var(--surface)',
+                  transition: 'all .2s', marginBottom: 20,
+                }}
+                onClick={() => m2FileInputRef.current?.click()}
+              >
+                <input
+                  type="file"
+                  ref={m2FileInputRef}
+                  className="hidden"
+                  accept=".docx,.pdf"
+                  onChange={e => { const f = e.target.files?.[0]; if (f) extractTextForM2(f); e.target.value = ''; }}
+                />
+                {m2IsExtracting ? (
+                  <><div className="spinner" style={{ width:20, height:20 }} /><span style={{ fontSize:13, color:'var(--text-2)' }}>Đang đọc file…</span></>
+                ) : m2FileInfo ? (
+                  <>
+                    <span style={{ fontSize:26 }}>📄</span>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:700, fontSize:14, color:'var(--blue)' }}>{m2FileInfo.name}</div>
+                      <div style={{ fontSize:12, color:'var(--text-3)' }}>✅ Đã trích xuất thành công · Click để đổi file</div>
+                    </div>
+                    <button onClick={e => { e.stopPropagation(); setM2FileText(''); setM2FileInfo(null); }}
+                      style={{ background:'none', border:'none', cursor:'pointer', color:'var(--text-3)', padding:4, fontSize:18 }}>✕</button>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ fontSize:26 }}>📂</span>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:700, fontSize:14, color:'var(--text-2)' }}>Tải lên file Word hoặc PDF</div>
+                      <div style={{ fontSize:12, color:'var(--text-3)' }}>.docx · .pdf — AI sẽ đọc và phân tích toàn bộ bài học</div>
+                    </div>
+                    <span className="btn btn-secondary btn--sm">↑ Chọn file</span>
+                  </>
+                )}
+              </div>
+
               {isLoading && (
                 <div className="ai-loading" style={{ marginBottom:16 }}>
                   <div className="spinner" />
@@ -1343,7 +1478,7 @@ Nếu là Trả lời ngắn/Điền khuyết: bỏ options, correctAnswer là �
               <div style={{ display:'flex', justifyContent:'center' }}>
                 <button className="btn btn-primary btn--lg"
                   onClick={runAnalysis}
-                  disabled={isLoading || (!inputText && !selectedImage)}>
+                  disabled={isLoading || m2IsExtracting || (!inputText && !selectedImage && !m2FileText)}>
                   {isLoading ? <Loader2 className="animate-spin" size={18} /> : <ChevronRight size={18} />}
                   Phân tích bài học
                 </button>
@@ -1864,25 +1999,6 @@ Nếu là Trả lời ngắn/Điền khuyết: bỏ options, correctAnswer là �
 
               ) : (
                 <div className="w-full min-h-[600px]">
-                  {selectedGameId === 'default' && (
-                    <div className="glass-card rounded-3xl p-8 bg-gradient-to-br from-indigo-900 via-violet-900 to-purple-900 text-white min-h-[500px] relative">
-                      <button
-                        onClick={() => setSelectedGameId(null)}
-                        className="absolute top-4 left-4 px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-sm font-medium flex items-center gap-2 transition-colors"
-                      >
-                        <ChevronRight size={16} className="rotate-180" /> Đổi Game
-                      </button>
-                      <div className="mt-8 h-full">
-                        {parsedQuestions.length > 0 ? (
-                          <GameComponent questions={parsedQuestions} />
-                        ) : (
-                          <div className="flex items-center justify-center h-full text-white/50">
-                            Chưa có câu hỏi nào để hiển thị trong game.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
                   {selectedGameId === 'vuot_ai' && (
                     <VuotAiTriThucGame 
                       initialQuestions={parsedQuestions.map(q => ({
@@ -2254,126 +2370,6 @@ Nếu là Trả lời ngắn/Điền khuyết: bỏ options, correctAnswer là �
 }
 
 // Simple Game Component integration
-function GameComponent({ questions }: { questions: QuestionItem[] }) {
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedOpt, setSelectedOpt] = useState<string | null>(null);
-  const [showAnswer, setShowAnswer] = useState(false);
-  const [score, setScore] = useState(0);
-  const [gameOver, setGameOver] = useState(false);
-
-  const currentQ = questions[currentIndex];
-
-  const handleSelect = (idxStr: string) => {
-    if (showAnswer) return;
-    setSelectedOpt(idxStr);
-    setShowAnswer(true);
-    
-    if (idxStr === currentQ.correctAnswer) {
-      setScore(s => s + 10);
-    }
-  };
-
-  const handleNext = () => {
-    if (currentIndex < questions.length - 1) {
-      setCurrentIndex(i => i + 1);
-      setSelectedOpt(null);
-      setShowAnswer(false);
-    } else {
-      setGameOver(true);
-    }
-  };
-
-  if (gameOver) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[500px] text-center space-y-6">
-        <h2 className="text-5xl font-bold text-yellow-400">🎉 Hoàn Thành! 🎉</h2>
-        <p className="text-3xl">Điểm của bạn: <span className="font-bold text-white text-5xl">{score}</span></p>
-        <button 
-          onClick={() => {
-            setCurrentIndex(0);
-            setScore(0);
-            setGameOver(false);
-            setSelectedOpt(null);
-            setShowAnswer(false);
-          }}
-          className="px-8 py-3 bg-white text-indigo-900 rounded-xl font-bold hover:bg-indigo-50 transition-colors"
-        >
-          Chơi lại
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col h-[500px]">
-      <div className="flex justify-between items-center mb-8">
-        <div className="bg-white/20 px-4 py-2 rounded-full font-bold text-sm tracking-widest backdrop-blur-sm">
-          CÂU {currentIndex + 1} / {questions.length}
-        </div>
-        <div className="bg-yellow-400/20 text-yellow-300 px-4 py-2 rounded-full font-bold text-sm tracking-widest backdrop-blur-sm">
-          ⭐ ĐIỂM: {score}
-        </div>
-      </div>
-
-      <div className="flex-1 flex flex-col justify-center">
-        <h3 className="text-2xl font-bold text-center leading-relaxed mb-8">
-          <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{currentQ.content}</Markdown>
-        </h3>
-
-        {currentQ.options && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-3xl mx-auto w-full">
-            {currentQ.options.map((opt, idx) => {
-              const letter = ['A', 'B', 'C', 'D'][idx];
-              let btnClass = "bg-white/10 hover:bg-white/20 border-white/20";
-              
-              if (showAnswer) {
-                if (letter === currentQ.correctAnswer) {
-                  btnClass = "bg-emerald-500 border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.5)] z-10 scale-105";
-                } else if (letter === selectedOpt) {
-                  btnClass = "bg-red-500 border-red-400 opacity-80";
-                } else {
-                  btnClass = "bg-white/5 border-transparent opacity-50";
-                }
-              }
-
-              return (
-                <button
-                  key={idx}
-                  onClick={() => handleSelect(letter)}
-                  className={cn(
-                    "p-6 rounded-2xl border-2 text-left transition-all duration-300 backdrop-blur-sm",
-                    btnClass
-                  )}
-                >
-                  <div className="flex items-center gap-4">
-                    <span className="w-10 h-10 rounded-full bg-black/20 flex items-center justify-center font-bold text-lg shrink-0 text-white">
-                      {letter}
-                    </span>
-                    <span className="text-lg font-medium text-white">
-                      <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{opt}</Markdown>
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="h-20 flex items-center justify-end mt-8">
-        {showAnswer && (
-          <button
-            onClick={handleNext}
-            className="px-8 py-3 bg-white text-indigo-900 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-50 shadow-xl"
-          >
-            {currentIndex < questions.length - 1 ? "Câu tiếp theo" : "Xem kết quả"} <ChevronRight size={20} />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function StageIndicator({ currentStage }: { currentStage: AppStage }) {
   const m2Stages: { id: AppStage; label: string }[] = [
     { id: 'm2_analyze', label: 'Phân tích' },

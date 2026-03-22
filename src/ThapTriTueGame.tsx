@@ -24,7 +24,17 @@ const FLOOR_COLORS = ['#fbbf24', '#f59e0b', '#d97706', '#b45309'];
 const MAX_MISTAKES = 3;
 
 function normalizeAnswer(str: string): string {
-  return (str || '').toString().toLowerCase().replace(/[\s$\\{}^_]/g, '');
+  return (str || '').toString()
+    .toLowerCase()
+    .replace(/\$[^$]*\$/g, m => m.slice(1, -1)) // $...$ -> nội dung bên trong
+    .replace(/[\s$\\{}^_]/g, '')                  // strip ký hiệu LaTeX còn lại
+    .replace(/[aàáâãăắặẳẵằ]/g, 'a')              // normalize dấu tiếng Việt không bắt buộc
+    || (str || '').toString().toLowerCase().replace(/[\s$\\{}^_]/g, '');
+}
+
+/** Hiển thị đáp án dễ đọc: bỏ $...$ wrapper */
+function displayAnswer(str: string): string {
+  return (str || '').replace(/^\$(.*)\$$/s, '$1').replace(/\\/g, '');
 }
 
 function convertToGameQuestions(qs: QuestionItem[]): GameQuestion[] {
@@ -163,7 +173,7 @@ export default function ThapTriTueGame({ initialQuestions, onBack }: ThapTriTueP
       setMistakes(newMistakes);
       setShake(true);
       setTimeout(() => setShake(false), 600);
-      showFeedbackMsg(`CHƯA ĐÚNG! Đáp án: ${q.answer}`, false);
+      showFeedbackMsg(`CHƯA ĐÚNG! Đáp án: ${displayAnswer(q.answer)}`, false);
       if (newMistakes >= MAX_MISTAKES) {
         advance(newMistakes, towerFloors, currentIdx + 1, false);
       } else {

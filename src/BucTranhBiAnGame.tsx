@@ -6,6 +6,11 @@ import { twMerge } from 'tailwind-merge';
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
+/** Bỏ ký hiệu LaTeX trước khi so sánh đáp án */
+function normalizeAns(s: string): string {
+  return (s || '').toLowerCase().replace(/[\s$\\{}^_]/g, '');
+}
+
 interface QuestionItem {
   id: string; content: string; options?: string[];
   correctAnswer?: string; type: string; level: string;
@@ -99,7 +104,7 @@ export default function BucTranhBiAnGame({ initialQuestions, onBack }: Props) {
       const val = shortAns.trim();
       if (!val) return;
 
-      const isOk = val.toLowerCase() === ca.toLowerCase();
+      const isOk = normalizeAns(val) === normalizeAns(ca);
       setAnswered(true);
       setFeedback(isOk
         ? { msg: '✅ Chính xác! +10 điểm', ok: true }

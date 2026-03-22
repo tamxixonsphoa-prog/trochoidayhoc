@@ -6,6 +6,11 @@ import { twMerge } from 'tailwind-merge';
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
+/** Normalize answer: bỏ ký hiệu LaTeX ($, \, {, }, ^, _) và khoảng trắng trước khi so sánh */
+function normalizeAns(s: string): string {
+  return (s || '').toLowerCase().replace(/[\s$\\{}^_]/g, '');
+}
+
 interface QuestionItem {
   id: string; content: string; options?: string[];
   correctAnswer?: string; type: string; level: string;
@@ -64,26 +69,26 @@ export default function SanKhoBauGame({ initialQuestions, onBack }: Props) {
       } else {
         // correctAnswer is text (e.g. "Đúng"/"Sai")
         const correctIdx = q.options.findIndex(
-          o => o.trim().toLowerCase() === ca.toLowerCase()
+          o => normalizeAns(o) === normalizeAns(ca)
         );
         const correctLetter = correctIdx >= 0 ? letters[correctIdx] : '';
         // selected could be letter or text
         isOk = correctLetter
-          ? (selected === correctLetter || selected.trim().toLowerCase() === ca.toLowerCase())
-          : (selected.trim().toLowerCase() === ca.toLowerCase());
+          ? (selected === correctLetter || normalizeAns(selected) === normalizeAns(ca))
+          : (normalizeAns(selected) === normalizeAns(ca));
         correctDisplay = q.options[correctIdx] ?? ca;
       }
 
       setFeedback(isOk
         ? { msg: '✅ Chính xác! +10 vàng', ok: true }
-        : { msg: `❌ Sai rồi! Đáp án: ${correctDisplay}`, ok: false });
+        : { msg: '❌ Sai rồi!', ok: false });
       if (isOk) setScore(s => s + 10);
     } else {
       // Short-answer mode
-      const isOk = selected.trim().toLowerCase() === ca.toLowerCase();
+      const isOk = normalizeAns(selected) === normalizeAns(ca);
       setFeedback(isOk
         ? { msg: '✅ Chính xác! +10 vàng', ok: true }
-        : { msg: `❌ Sai rồi! Đáp án: ${ca}`, ok: false });
+        : { msg: '❌ Sai rồi!', ok: false });
       if (isOk) setScore(s => s + 10);
     }
   };
@@ -98,11 +103,11 @@ export default function SanKhoBauGame({ initialQuestions, onBack }: Props) {
   const checkFill = () => {
     const answers = q.correctAnswer ? [q.correctAnswer] : [];
     const ok = answers.every((a, i) =>
-      (filledSlots[i] || '').trim().toLowerCase() === a.trim().toLowerCase());
+      normalizeAns(filledSlots[i] || '') === normalizeAns(a));
     setAnswered(true);
     setFeedback(ok
       ? { msg: '✅ Tuyệt vời! +10 vàng', ok: true }
-      : { msg: `❌ Chưa đúng! Đáp án: ${answers.join(', ')}`, ok: false });
+      : { msg: '❌ Chưa đúng!', ok: false });
     if (ok) setScore(s => s + 10);
   };
 
@@ -226,7 +231,7 @@ export default function SanKhoBauGame({ initialQuestions, onBack }: Props) {
                   className={cn(
                     'p-4 rounded-2xl font-bold text-left flex items-center gap-3 transition-all',
                     !answered ? 'bg-white/10 hover:bg-amber-500 hover:text-slate-900 cursor-pointer' :
-                    isCorrect ? 'bg-green-500 text-white' : 'bg-white/5 text-white/40'
+                    isCorrect ? 'bg-green-500 text-white scale-[1.02] shadow-lg shadow-green-500/40' : 'bg-white/5 text-white/40'
                   )}>
                   <span className="w-8 h-8 rounded-full bg-amber-500 text-slate-900 flex items-center justify-center text-sm font-black shrink-0">
                     {letter}
@@ -254,8 +259,8 @@ export default function SanKhoBauGame({ initialQuestions, onBack }: Props) {
           </div>
         )}
 
-        {feedback && (
-          <div className={cn('px-6 py-3 rounded-xl font-bold text-lg', feedback.ok ? 'bg-green-500' : 'bg-red-500')}>
+        {feedback && feedback.ok && (
+          <div className="px-6 py-3 rounded-xl font-bold text-lg bg-green-500 text-white">
             {feedback.msg}
           </div>
         )}
