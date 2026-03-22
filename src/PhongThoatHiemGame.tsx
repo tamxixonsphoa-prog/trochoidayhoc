@@ -6,6 +6,7 @@ import rehypeKatex from 'rehype-katex';
 export interface QuestionItem {
   id: string; content: string; options?: string[];
   correctAnswer?: string; type: string; level: string;
+  image?: string;
 }
 interface Props { initialQuestions: QuestionItem[]; onBack: () => void; }
 
@@ -608,6 +609,7 @@ export default function PhongThoatHiemGame({ initialQuestions, onBack }: Props) 
           </div>
           <div className="text-white font-semibold leading-relaxed prose prose-invert prose-sm max-w-none">
             <Markdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>{q?.content || ''}</Markdown>
+            {q?.image && <img src={q.image} alt="Ảnh câu hỏi" style={{ maxHeight: 160, maxWidth: '100%', borderRadius: 8, marginTop: 10 }} />}
           </div>
         </div>
 

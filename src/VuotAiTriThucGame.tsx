@@ -15,6 +15,7 @@ export interface QuestionItem {
   correctAnswer: string;
   type: string;
   level: string;
+  image?: string;
 }
 
 interface VuotAiTriThucProps {
@@ -206,6 +207,11 @@ export default function VuotAiTriThucGame({ initialQuestions, onBack }: VuotAiTr
                     {q.content}
                   </Markdown>
                 </div>
+                {q.image && (
+                  <div className="mt-4 flex justify-center">
+                    <img src={q.image} alt="Ảnh câu hỏi" style={{ maxHeight: 180, maxWidth: '100%', borderRadius: 10, border: '2px solid rgba(255,255,255,0.2)' }} />
+                  </div>
+                )}
             </div>
 
             {/* Options */}

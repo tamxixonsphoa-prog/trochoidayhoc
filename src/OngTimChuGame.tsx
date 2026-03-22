@@ -5,6 +5,7 @@ import MathText from './MathText';
 interface QuestionItem {
   id: string; content: string; options?: string[];
   correctAnswer?: string; type: string; level: string;
+  image?: string;
 }
 interface Props { initialQuestions: QuestionItem[]; onBack: () => void; }
 

@@ -6,6 +6,7 @@ import rehypeKatex from 'rehype-katex';
 export interface QuestionItem {
   id: string; content: string; options?: string[];
   correctAnswer?: string; type: string; level: string;
+  image?: string;
 }
 interface Props { initialQuestions: QuestionItem[]; onBack: () => void; }
 interface GameQ { q: string; opts: string[]; corr: number; }

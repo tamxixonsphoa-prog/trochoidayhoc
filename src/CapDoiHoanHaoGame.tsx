@@ -16,6 +16,7 @@ export interface QuestionItem {
   correctAnswer?: string;
   type: string;
   level: string;
+  image?: string;
 }
 
 interface Props {

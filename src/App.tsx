@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -183,6 +183,7 @@ interface QuestionItem {
   correctAnswer?: string;
   type: string;
   level: string;
+  image?: string; // base64 data URL, do GV tự tải lên
 }
 
 const AI_MODELS = [
@@ -1798,12 +1799,40 @@ Nếu là Trả lời ngắn/Điền khuyết: bỏ options, correctAnswer là �
                           </div>
 
                           <textarea
-                            className="w-full p-3 rounded-xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all resize-none text-sm mb-3 font-medium"
+                            className="w-full p-3 rounded-xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all resize-none text-sm mb-2 font-medium"
                             value={q.content}
                             onChange={(e) => handleQuestionChange(q.id, 'content', e.target.value)}
                             rows={3}
                             placeholder="Nội dung câu hỏi..."
                           />
+
+                          {/* --- Image upload per question --- */}
+                          <div style={{ marginBottom: 10 }}>
+                            {q.image ? (
+                              <div style={{ position:'relative', display:'inline-block', maxWidth:'100%' }}>
+                                <img src={q.image} alt="ảnh câu hỏi" style={{ maxHeight:140, maxWidth:'100%', borderRadius:8, border:'1px solid #e2e8f0', display:'block' }} />
+                                <button
+                                  onClick={() => handleQuestionChange(q.id, 'image', undefined)}
+                                  style={{ position:'absolute', top:4, right:4, background:'rgba(0,0,0,0.55)', color:'white', border:'none', borderRadius:'50%', width:22, height:22, cursor:'pointer', fontSize:13, display:'flex', alignItems:'center', justifyContent:'center' }}
+                                  title="Xóa ảnh"
+                                >✕</button>
+                              </div>
+                            ) : (
+                              <label style={{ display:'inline-flex', alignItems:'center', gap:6, cursor:'pointer', fontSize:12, color:'#6366f1', fontWeight:600, padding:'4px 10px', border:'1.5px dashed #a5b4fc', borderRadius:8, background:'#f5f3ff', transition:'all .15s' }}>
+                                <ImageIcon size={13} /> Tải ảnh cho câu này
+                                <input type="file" accept="image/*" style={{ display:'none' }}
+                                  onChange={e => {
+                                    const f = e.target.files?.[0];
+                                    if (!f) return;
+                                    const reader = new FileReader();
+                                    reader.onload = ev => handleQuestionChange(q.id, 'image', ev.target?.result as string);
+                                    reader.readAsDataURL(f);
+                                    e.target.value = '';
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </div>
 
                           {q.options && q.options.length > 0 && (
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">

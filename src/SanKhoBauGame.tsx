@@ -14,6 +14,7 @@ function normalizeAns(s: string): string {
 interface QuestionItem {
   id: string; content: string; options?: string[];
   correctAnswer?: string; type: string; level: string;
+  image?: string;
 }
 interface Props { initialQuestions: QuestionItem[]; onBack: () => void; }
 
@@ -177,6 +178,7 @@ export default function SanKhoBauGame({ initialQuestions, onBack }: Props) {
             {q.type} · {q.level}
           </span>
           {!hasBlanks && <MathText className="text-xl font-bold leading-relaxed mt-2 text-center">{q.content}</MathText>}
+          {q.image && <img src={q.image} alt="Ảnh câu hỏi" style={{ maxHeight: 160, maxWidth: '100%', borderRadius: 10, margin: '10px auto 0', display: 'block' }} />}
         </div>
 
         {/* Fill-blank drag-drop */}
