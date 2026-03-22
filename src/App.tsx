@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -760,25 +760,47 @@ export default function App() {
         const arrayBuffer = await file.arrayBuffer();
         const zip = await new JSZip().loadAsync(arrayBuffer);
 
-        // 1. Đọc relationships: rId -> đường dẫn file ảnh
+        // 1. Relationships: rId -> path (robust: any attribute order)
         const relsRaw = await zip.file('word/_rels/document.xml.rels')?.async('string') || '';
         const imageRels: Record<string, string> = {};
-        for (const m of relsRaw.matchAll(/Id="(rId\d+)"[^>]*Target="([^"]*media[^"]*)"/g)) {
-          const [, rId, target] = m;
-          const path = target.startsWith('..') ? `word/${target.replace('../', '')}` : `word/${target}`;
-          imageRels[rId] = path;
+        const relMatches = [...relsRaw.matchAll(/<Relationship[^>]+>/g)];
+        for (const relEl of relMatches) {
+          const el = relEl[0];
+          const idM = el.match(/Id="(rId\d+)"/);
+          const targetM = el.match(/Target="([^"]+)"/);
+          if (!idM || !targetM) continue;
+          const target = targetM[1];
+          if (!target.toLowerCase().includes('media')) continue;
+          const normalized = target.replace(/^\.\.\//, 'word/').replace(/^media\//, 'word/media/');
+          imageRels[idM[1]] = normalized;
         }
 
-        // 2. Lấy ảnh PNG/JPEG từ word/media/ (bỏ qua EMF/WMF)
+        // 2. Load all PNG/JPEG from media into cache (key: original + lowercase)
         const imageCache: Record<string, string> = {};
-        for (const [path, entry] of Object.entries(zip.files)) {
-          if (!(entry as any).async || !path.startsWith('word/media/')) continue;
-          const ext = path.split('.').pop()?.toLowerCase() || '';
+        for (const [zipPath, entry] of Object.entries(zip.files)) {
+          if ((entry as any).dir || !zipPath.includes('media/')) continue;
+          const ext = zipPath.split('.').pop()?.toLowerCase() || '';
           if (!['png','jpg','jpeg','gif','webp'].includes(ext)) continue;
-          const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : `image/${ext}`;
+          const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : ('image/' + ext);
           const b64 = await (entry as any).async('base64');
-          imageCache[path] = `data:${mime};base64,${b64}`;
+          const dataUrl = 'data:' + mime + ';base64,' + b64;
+          imageCache[zipPath] = dataUrl;
+          imageCache[zipPath.toLowerCase()] = dataUrl;
         }
+
+        // Helper: resolve image by rId, with PNG fallback when EMF referenced
+        const resolveImage = (rId: string): string | null => {
+          const p = imageRels[rId];
+          if (!p) return null;
+          if (imageCache[p]) return imageCache[p];
+          if (imageCache[p.toLowerCase()]) return imageCache[p.toLowerCase()];
+          const base = p.replace(/\.[^.]+$/, '');
+          for (const e of ['png','jpg','jpeg','gif','webp']) {
+            if (imageCache[base + '.' + e]) return imageCache[base + '.' + e];
+            if (imageCache[(base + '.' + e).toLowerCase()]) return imageCache[(base + '.' + e).toLowerCase()];
+          }
+          return null;
+        };
 
         // 3. Parse document.xml: trích xuất paragraphs theo đúng thứ tự
         const docXml = await zip.file('word/document.xml')?.async('string') || '';
@@ -788,25 +810,26 @@ export default function App() {
         let imgIdx = 0;
         const lines: string[] = [];
 
-        // Xpath-lite: loop qua tất cả thẻ <w:p> (paragraph)
-        for (const paraMatch of docXml.matchAll(/<w:p[ >][ -\uFFFF]*?<\/w:p>/g)) {
-          const para = paraMatch[0];
+        // Split document by paragraph tags (works regardless of newlines in XML)
+        const paraRaw = docXml.split('<w:p').slice(1);
+        for (const chunk of paraRaw) {
+          const end = chunk.indexOf('</w:p>');
+          const para = '<w:p' + (end >= 0 ? chunk.slice(0, end) : chunk) + '</w:p>';
           let line = '';
 
-          // Tìm ảnh trong paragraph này (<a:blip r:embed="rId...">)
+          // Find images (<a:blip r:embed="rId...">)
           for (const blipM of para.matchAll(/<a:blip[^>]+r:embed="(rId\d+)"/g)) {
-            const rId = blipM[1];
-            const imgPath = imageRels[rId];
-            if (imgPath && imageCache[imgPath]) {
-              const key = `__IMG_${++imgIdx}__`;
-              imageMap[key] = imageCache[imgPath];
-              line += `\n![hình](${key})\n`;
-            } else if (imgPath) {
-              line += `[Hình vẽ] `; // EMF/WMF không hỗ trợ
+            const dataUrl = resolveImage(blipM[1]);
+            if (dataUrl) {
+              const key = '__IMG_' + (++imgIdx) + '__';
+              imageMap[key] = dataUrl;
+              line += '\n![hinh](' + key + ')\n';
+            } else {
+              line += '[Hinh ve] ';
             }
           }
 
-          // Lấy text thuần từ <w:t>
+          // Extract text from <w:t> elements
           for (const tM of para.matchAll(/<w:t(?:[^>]*)>([^<]*)<\/w:t>/g)) {
             line += tM[1];
           }
