@@ -825,23 +825,25 @@ export default function App() {
     if (!m1RawText.trim()) { setError('Vui lòng nhập nội dung câu hỏi.'); return; }
     setIsLoading(true); setError(null);
     try {
-      const prompt = `Bạn là trợ lý giáo dục. Hãy phân tích nội dung câu hỏi sau (có thể ở dạng HTML có chứa thẻ <img> với ảnh nhúng base64) và trả về ĐÚNG định dạng JSON.
+      const prompt = `Bạn là trợ lý giáo dục. Hãy phân tích nội dung câu hỏi sau và trả về ĐÚNG định dạng JSON.
 Dạng câu hỏi: ${m1QuestionTypes.join(', ')}.
 
-QUAN TRỌNG VỀ ẢNH:
-- Nếu câu hỏi có chứa thẻ <img src="data:...">, hãy sao chép NGUYÊN THẺ IMG đó vào trường "content" của câu hỏi dưới dạng markdown: ![](data:image/...;base64,...)
-- Trường content nên kết hợp cả văn bản câu hỏi và những ảnh đi kèm.
+QUAN TRỌNG VỀ ẢNH (BẮT BUỘC):
+- Trong văn bản có thể xuất hiện các token ảnh dạng: ![hình](__IMG_1__) hoặc ![hình](__IMG_2__) v.v.
+- Bạn PHẢI sao chép NGUYÊN VẸN chuỗi đó (kể cả dấu ngoặc và chữ số) vào trường "content" của câu hỏi tương ứng.
+- TUYỆT ĐỐI không bỏ qua, không sửa đổi, không thay thế các token này.
+- Ví dụ: nếu câu hỏi có "Câu 7. ... ![hình](__IMG_1__)" thì content phải chứa "![hình](__IMG_1__)".
 
 QUAN TRỌNG VỀ ĐỊNH DẠNG CÔNG THỨC:
 - Mọi công thức hóa học (C6H12O6, H2SO4, Fe2O3...) và toán học PHẢI được bọc trong ký tự $ định dạng LaTeX.
 - Ví dụ: C6H12O6 → $C_6H_{12}O_6$  |  H2O → $H_2O$  |  10^-10 → $10^{-10}$
 - Đây là YÊU CẦU BẮT BUỘC, không bỏ qua.
 
-Văn bản/HTML:
+Văn bản:
 ${m1RawText}
 
 Trả về JSON bọc trong \`\`\`json ... \`\`\`, là một mảng:
-[{"id":"q1","content":"...","options":["$C_6H_{12}O_6$","$(C_6H_{10}O_5)_n$","$C_{12}H_{22}O_{11}$","$C_6H_{12}O_6$"],"correctAnswer":"A","type":"Trắc nghiệm khách quan","level":"Nhận biết"}]
+[{"id":"q1","content":"Câu hỏi... ![hình](__IMG_1__)","options":["A","B","C","D"],"correctAnswer":"A","type":"Trắc nghiệm khách quan","level":"Nhận biết"}]
 LƯU Ý QUAN TRỌNG: Options KHÔNG được có chữ cái đầu (A., B., C., D.) — chỉ ghi NỘI DUNG đáp án.
 correctAnswer phải là "A", "B", "C", "D" (vị trí trong mảng options).
 Nếu là câu Đúng/Sai: options=["Đúng","Sai"], correctAnswer="Đúng" hoặc "Sai".
