@@ -726,7 +726,7 @@ export default function App() {
   };
 
 
-  // Load mammoth.js from CDN (for DOCX extraction)
+  // Load mammoth.js from CDN (for DOCX text extraction fallback)
   const loadMammoth = (): Promise<any> => new Promise((resolve, reject) => {
     const w = window as any;
     if (w.mammoth) { resolve(w.mammoth); return; }
@@ -737,6 +737,17 @@ export default function App() {
     document.head.appendChild(script);
   });
 
+  // Load JSZip from CDN (for reading DOCX as ZIP to access raw PNG/JPEG images)
+  const loadJSZip = (): Promise<any> => new Promise((resolve, reject) => {
+    const w = window as any;
+    if (w.JSZip) { resolve(w.JSZip); return; }
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    script.onload = () => resolve(w.JSZip);
+    script.onerror = () => reject(new Error('Không tải được JSZip.'));
+    document.head.appendChild(script);
+  });
+
   // Extract text from DOCX (mammoth CDN) or PDF (Gemini inline base64)
   const extractTextFromFile = async (file: File) => {
     setM1IsExtracting(true); setError(null);
@@ -744,41 +755,73 @@ export default function App() {
       let extractedText = '';
 
       if (file.name.toLowerCase().endsWith('.docx')) {
-        // ── DOCX: mammoth.js convertToHtml (giữ ảnh dưới dạng base64) ──
-        const mammoth = await loadMammoth();
+        // ── DOCX: JSZip + XML parsing — bảo toàn ảnh PNG/JPEG gốc ──
+        const [JSZip, mammoth] = await Promise.all([loadJSZip(), loadMammoth()]);
         const arrayBuffer = await file.arrayBuffer();
-        const result = await mammoth.convertToHtml(
-          { arrayBuffer },
-          {
-            convertImage: mammoth.images.imgElement((image: any) =>
-              image.read('base64').then((base64Data: string) => ({
-                src: `data:${image.contentType};base64,${base64Data}`,
-              }))
-            ),
-          }
-        );
-        let html = result.value || '';
-        if (!html.trim()) throw new Error('File Word không có nội dung văn bản.');
+        const zip = await new JSZip().loadAsync(arrayBuffer);
 
-        // Trích xuất ảnh base64, thay bằng placeholder để không vượt token limit của Gemini
+        // 1. Đọc relationships: rId -> đường dẫn file ảnh
+        const relsRaw = await zip.file('word/_rels/document.xml.rels')?.async('string') || '';
+        const imageRels: Record<string, string> = {};
+        for (const m of relsRaw.matchAll(/Id="(rId\d+)"[^>]*Target="([^"]*media[^"]*)"/g)) {
+          const [, rId, target] = m;
+          const path = target.startsWith('..') ? `word/${target.replace('../', '')}` : `word/${target}`;
+          imageRels[rId] = path;
+        }
+
+        // 2. Lấy ảnh PNG/JPEG từ word/media/ (bỏ qua EMF/WMF)
+        const imageCache: Record<string, string> = {};
+        for (const [path, entry] of Object.entries(zip.files)) {
+          if (!(entry as any).async || !path.startsWith('word/media/')) continue;
+          const ext = path.split('.').pop()?.toLowerCase() || '';
+          if (!['png','jpg','jpeg','gif','webp'].includes(ext)) continue;
+          const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : `image/${ext}`;
+          const b64 = await (entry as any).async('base64');
+          imageCache[path] = `data:${mime};base64,${b64}`;
+        }
+
+        // 3. Parse document.xml: trích xuất paragraphs theo đúng thứ tự
+        const docXml = await zip.file('word/document.xml')?.async('string') || '';
+        if (!docXml) throw new Error('Không đọc được nội dung file Word.');
+
         const imageMap: Record<string, string> = {};
         let imgIdx = 0;
-        html = html.replace(/src="(data:[^"]+)"/g, (_match: string, dataUrl: string) => {
-          const key = `__IMG_${++imgIdx}__`;
-          imageMap[key] = dataUrl;
-          return `src="${key}"`;
-        });
+        const lines: string[] = [];
 
-        // Chuyển HTML sang text đơn giản (giữ Alt text + placeholder) để gửi Gemini
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = html;
-        // Thay img tags bằng markdown placeholder
-        tempDiv.querySelectorAll('img').forEach((img: HTMLImageElement) => {
-          const placeholder = img.getAttribute('src') || '';
-          const md = document.createTextNode(`\n![hình](${placeholder})\n`);
-          img.parentNode?.replaceChild(md, img);
-        });
-        extractedText = tempDiv.innerText || tempDiv.textContent || '';
+        // Xpath-lite: loop qua tất cả thẻ <w:p> (paragraph)
+        for (const paraMatch of docXml.matchAll(/<w:p[ >][ -\uFFFF]*?<\/w:p>/g)) {
+          const para = paraMatch[0];
+          let line = '';
+
+          // Tìm ảnh trong paragraph này (<a:blip r:embed="rId...">)
+          for (const blipM of para.matchAll(/<a:blip[^>]+r:embed="(rId\d+)"/g)) {
+            const rId = blipM[1];
+            const imgPath = imageRels[rId];
+            if (imgPath && imageCache[imgPath]) {
+              const key = `__IMG_${++imgIdx}__`;
+              imageMap[key] = imageCache[imgPath];
+              line += `\n![hình](${key})\n`;
+            } else if (imgPath) {
+              line += `[Hình vẽ] `; // EMF/WMF không hỗ trợ
+            }
+          }
+
+          // Lấy text thuần từ <w:t>
+          for (const tM of para.matchAll(/<w:t(?:[^>]*)>([^<]*)<\/w:t>/g)) {
+            line += tM[1];
+          }
+
+          if (line.trim()) lines.push(line.trim());
+        }
+
+        extractedText = lines.join('\n');
+
+        // Fallback: nếu XML không cho ra text hợp lệ, dùng mammoth
+        if (!extractedText.trim()) {
+          const r = await mammoth.extractRawText({ arrayBuffer });
+          extractedText = r.value || '';
+        }
+        if (!extractedText.trim()) throw new Error('File Word không có nội dung văn bản.');
 
         // Lưu imageMap để re-inject sau khi Gemini parse
         (window as any).__m1ImageMap = imageMap;
